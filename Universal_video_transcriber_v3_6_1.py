@@ -2,11 +2,11 @@
 """
 v3.6.1 universal
 
-Интересные факты про текущую версию:
-- это монолит без внешних постпроцессоров;
-- у него есть защита от ASR-зацикливания (бесконечное повторение одного и того же слова/фразы);
-- модель универсальна: лекции, подкасты, созвоны, интервью, видеоуроки - всё транскрибирует;
-- по умолчанию формирует 3 основных итоговых файла:
+Идея версии:
+- один монолитный скрипт без внешних постпроцессоров;
+- защита от ASR-зацикливания на коротких повторах;
+- универсальная логика: лекции, подкасты, созвоны, интервью, видеоуроки;
+- 3 основных итоговых файла по умолчанию:
     1) *_full_readable.txt  — полный читаемый текст;
     2) *_brief.txt          — краткое содержание по разделам;
     3) *_study_pack.txt     — вопросы, карточки, словарь терминов, план повторения.
@@ -15,8 +15,9 @@ v3.6.1 universal
 
 Требования:
     pip install faster-whisper
+Опционально:
     pip install av
-    ffmpeg / ffprobe в PATH, либо по директории запуска
+    ffmpeg / ffprobe в PATH
 """
 
 from __future__ import annotations
@@ -28,58 +29,12 @@ import re
 import shutil
 import subprocess
 import time
-from typing import Dict, Iterable, List, Optional, Tuple, TypedDict, Any, cast
 from collections import Counter, defaultdict
 from pathlib import Path
-
-
-class ProfileSettingsDict(TypedDict):
-    model_cuda: str
-    model_cpu: str
-    compute_cuda: str
-    compute_cpu: str
-    beam_size: int
-    best_of: int
-    temperature: float
-    use_batched: bool
-    batch_size: int
-
-
-class DiagnosticsDict(TypedDict, total=False):
-    raw: str
-    protected_terms: List[str]
-    stage1: str
-    final: str
-    flags: List[str]
-    changes: List[str]
-
-
-class SegmentDict(TypedDict):
-    index: int
-    start: float
-    end: float
-    text: str
-    clean_text: str
-    diagnostics: DiagnosticsDict
-
-
-class ParagraphDict(TypedDict):
-    start: float
-    end: float
-    text: str
-    segments: int
-
-
-class SectionDict(TypedDict):
-    start: float
-    end: float
-    title: str
-    text: str
-    paragraphs: List[ParagraphDict]
-
+from typing import Dict, Iterable, List, Optional, Tuple
 
 try:
-    import av
+    import av  # type: ignore
 except Exception:
     av = None
 
@@ -95,8 +50,8 @@ except Exception:
 # USER SETTINGS
 # =========================================================
 
-INPUT_MEDIA = r"путь файла на вход"
-OUTPUT_DIR = r"путь файла на выход"
+INPUT_MEDIA = r"путь откуда взять файл"
+OUTPUT_DIR = r"путь куда файл сохранится"
 BASE_NAME = ""
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -133,7 +88,7 @@ LOOP_MAX_UNIQUE_NORMALIZED = 4
 LOOP_MAX_WORDS_PER_SEGMENT = 8
 LOOP_MAX_CHARS_PER_SEGMENT = 80
 
-# По умолчанию создаются только 3 основных txt
+# По умолчанию оставляем только 3 основных txt.
 SAVE_SRT = False
 SAVE_JSON = False
 SAVE_DEBUG_JSON = False
@@ -155,7 +110,7 @@ MAX_GLOSSARY_TERMS = 18
 # PROFILES
 # =========================================================
 
-def profile_settings(profile: str) -> ProfileSettingsDict:
+def profile_settings(profile: str) -> Dict[str, object]:
     profile = profile.lower().strip()
 
     if profile == "fast":
@@ -175,7 +130,7 @@ def profile_settings(profile: str) -> ProfileSettingsDict:
         return {
             "model_cuda": "large-v3",
             "model_cpu": "medium",
-            "compute_cuda": "float16",  # если компьютер не вывозит - "int8_float16"
+            "compute_cuda": "float16", # если компьютер не вывозит - "int8_float16"
             "compute_cpu": "int8",
             "beam_size": 5,
             "best_of": 5,
@@ -197,7 +152,8 @@ def profile_settings(profile: str) -> ProfileSettingsDict:
     }
 
 
-PROFILE_SETTINGS: ProfileSettingsDict = profile_settings(PROFILE)
+PROFILE_SETTINGS = profile_settings(PROFILE)
+
 
 # =========================================================
 # CONSTANTS
@@ -242,7 +198,7 @@ SAFE_REPLACEMENTS = {
     "…": "...",
 }
 
-# Только безопасные и довольно универсальные замены
+# Только безопасные и довольно универсальные замены.
 SOFT_REPLACEMENTS = {
     "рок кривая": "ROC-кривая",
     "рок-кривая": "ROC-кривая",
@@ -420,6 +376,7 @@ def hhmmss(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
+
 def srt_time(seconds: float) -> str:
     ms_total = max(0, int(round(seconds * 1000)))
     h = ms_total // 3600000
@@ -431,14 +388,17 @@ def srt_time(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
+
 def slugify(name: str) -> str:
     name = re.sub(r"[^\w\-. ]+", "", name, flags=re.UNICODE).strip()
     name = re.sub(r"\s+", "_", name)
     return name or "transcript"
 
 
+
 def run_cmd(cmd: List[str]):
     return subprocess.run(cmd, capture_output=True, text=True, check=False)
+
 
 
 def get_media_duration_seconds(path: Path) -> Optional[float]:
@@ -475,14 +435,17 @@ def get_media_duration_seconds(path: Path) -> Optional[float]:
     return None
 
 
+
 def save_text(path: Path, content: str):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8-sig", newline="\n")
 
 
+
 def save_json(path: Path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
 
 
 def normalize_basic(text: str) -> str:
@@ -503,6 +466,7 @@ def normalize_basic(text: str) -> str:
     return text.strip()
 
 
+
 def normalize_domains_and_tokens(text: str) -> str:
     text = re.sub(r"([A-Za-z0-9_-])\s*\.\s*([A-Za-z0-9_-])", r"\1.\2", text)
     text = re.sub(r"\s*/\s*(\d{1,3})", r"/\1", text)
@@ -510,6 +474,7 @@ def normalize_domains_and_tokens(text: str) -> str:
     text = re.sub(r"\b([A-Za-z]+)\s*\.\s*([A-Za-z]{2,})\b", r"\1.\2", text)
     text = re.sub(r"\b([A-Za-z]+)\s*/\s*([A-Za-z0-9]+)\b", r"\1/\2", text)
     return text
+
 
 
 def remove_fillers(text: str) -> str:
@@ -536,6 +501,7 @@ def remove_fillers(text: str) -> str:
     return normalize_basic(text)
 
 
+
 def remove_repeated_words(text: str) -> str:
     pattern = re.compile(r"\b([A-Za-zА-Яа-яЁё0-9\-/.+#]{1,60})\b(?:\s+\1\b)+", re.IGNORECASE)
     prev = None
@@ -543,6 +509,7 @@ def remove_repeated_words(text: str) -> str:
         prev = text
         text = pattern.sub(r"\1", text)
     return text
+
 
 
 def apply_soft_replacements(text: str, replacements: Dict[str, str]) -> str:
@@ -554,13 +521,14 @@ def apply_soft_replacements(text: str, replacements: Dict[str, str]) -> str:
     return text
 
 
+
 def protect_technical_terms(text: str) -> Tuple[str, Dict[str, str]]:
     protected = text
     mapping: Dict[str, str] = {}
     counter = 0
 
     def repl_factory(canonical: str):
-        def _repl(_match: object) -> str:
+        def _repl(_match):
             nonlocal counter
             token = f"__TECH_{counter}__"
             counter += 1
@@ -575,16 +543,19 @@ def protect_technical_terms(text: str) -> Tuple[str, Dict[str, str]]:
     return protected, mapping
 
 
+
 def restore_technical_terms(text: str, mapping: Dict[str, str]) -> str:
     for token, value in mapping.items():
         text = text.replace(token, value)
     return normalize_basic(text)
 
 
+
 def smart_capitalize_abbreviations(text: str) -> str:
     for k, v in ABBREV_CANON.items():
         text = re.sub(rf"\b{k}\b", v, text, flags=re.IGNORECASE)
     return text
+
 
 
 def sentence_case(text: str) -> str:
@@ -596,17 +567,21 @@ def sentence_case(text: str) -> str:
     return text[0].upper() + text[1:]
 
 
+
 def tokenize_words(text: str) -> List[str]:
     return re.findall(r"[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё0-9\-/.+#]*", text.lower())
+
 
 
 def word_count(text: str) -> int:
     return len(re.findall(r"[A-Za-zА-Яа-яЁё0-9\-/.+#]+", text))
 
 
+
 def sentence_split(text: str) -> List[str]:
     parts = re.split(r"(?<=[.!?])\s+", normalize_basic(text))
     return [p.strip() for p in parts if p.strip()]
+
 
 
 def load_custom_replacements(path: Optional[str]) -> Dict[str, str]:
@@ -617,7 +592,7 @@ def load_custom_replacements(path: Optional[str]) -> Dict[str, str]:
         print(f"[WARN] Файл замен не найден: {p}")
         return {}
 
-    rules: Dict[str, str] = {}
+    rules = {}
     for line in p.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=>" not in line:
@@ -628,6 +603,7 @@ def load_custom_replacements(path: Optional[str]) -> Dict[str, str]:
         if wrong:
             rules[wrong] = correct
     return rules
+
 
 
 def looks_like_service_segment(text: str, start_sec: float = 0.0) -> bool:
@@ -654,6 +630,7 @@ def looks_like_service_segment(text: str, start_sec: float = 0.0) -> bool:
     return False
 
 
+
 def is_too_weak(text: str) -> bool:
     low = normalize_basic(text).lower().strip(" .,!?:;—-")
     if not low:
@@ -663,6 +640,7 @@ def is_too_weak(text: str) -> bool:
     if re.fullmatch(r"(да|нет|угу|ага|окей|хорошо|понятно|ребят|так|ну|вот|алло|слышно|видно)+", low):
         return True
     return False
+
 
 
 def section_marker_score(text: str) -> int:
@@ -680,6 +658,7 @@ def section_marker_score(text: str) -> int:
     return score
 
 
+
 def important_score(text: str) -> int:
     low = text.lower()
     score = 0
@@ -694,11 +673,13 @@ def important_score(text: str) -> int:
     return score
 
 
+
 def cleanup_title_candidate(text: str) -> str:
     out = text.strip()
     for pat in TITLE_PREFIX_PATTERNS:
         out = re.sub(pat, "", out, flags=re.IGNORECASE)
     return normalize_basic(out)
+
 
 
 def first_sentence_or_snippet(text: str, limit_words: int = 14) -> str:
@@ -709,6 +690,7 @@ def first_sentence_or_snippet(text: str, limit_words: int = 14) -> str:
     if len(words) > limit_words:
         head = " ".join(words[:limit_words]).rstrip(",;:") + "..."
     return head
+
 
 
 def title_from_paragraph(text: str) -> str:
@@ -736,9 +718,10 @@ def title_from_paragraph(text: str) -> str:
     return first_sentence_or_snippet(best_title or sents[0], 14)
 
 
+
 def keyword_candidates(text: str) -> List[str]:
     words = tokenize_words(text)
-    result: List[str] = []
+    result = []
     for w in words:
         if w in RUS_STOPWORDS:
             continue
@@ -750,9 +733,10 @@ def keyword_candidates(text: str) -> List[str]:
     return result
 
 
+
 def bigram_candidates(text: str) -> List[str]:
     words = keyword_candidates(text)
-    result: List[str] = []
+    result = []
     for a, b in zip(words, words[1:]):
         if a == b:
             continue
@@ -762,9 +746,10 @@ def bigram_candidates(text: str) -> List[str]:
     return result
 
 
+
 def trigram_candidates(text: str) -> List[str]:
     words = keyword_candidates(text)
-    result: List[str] = []
+    result = []
     for a, b, c in zip(words, words[1:], words[2:]):
         uniq = {a, b, c}
         if len(uniq) < 2:
@@ -773,8 +758,9 @@ def trigram_candidates(text: str) -> List[str]:
     return result
 
 
+
 def build_suspicion_flags(raw_text: str, clean_text: str) -> List[str]:
-    flags: List[str] = []
+    flags = []
     low_raw = raw_text.lower()
 
     if raw_text.count("...") >= 2 or "..." in raw_text:
@@ -794,8 +780,9 @@ def build_suspicion_flags(raw_text: str, clean_text: str) -> List[str]:
     return flags
 
 
-def clean_segment_text(raw_text: str, custom_replacements: Dict[str, str]) -> Tuple[str, DiagnosticsDict]:
-    diagnostics: DiagnosticsDict = {"raw": raw_text}
+
+def clean_segment_text(raw_text: str, custom_replacements: Dict[str, str]) -> Tuple[str, Dict[str, object]]:
+    diagnostics: Dict[str, object] = {"raw": raw_text}
 
     protected, mapping = protect_technical_terms(raw_text)
     stage1 = normalize_basic(protected)
@@ -824,7 +811,8 @@ def clean_segment_text(raw_text: str, custom_replacements: Dict[str, str]) -> Tu
     return restored, diagnostics
 
 
-def estimate_eta(start_time: float, processed_seconds: float, total_seconds: Optional[float]) -> Tuple[Optional[float], float]:
+
+def estimate_eta(start_time: float, processed_seconds: float, total_seconds: Optional[float]):
     elapsed = time.time() - start_time
     if not processed_seconds or not total_seconds or processed_seconds <= 0:
         return None, elapsed
@@ -836,7 +824,8 @@ def estimate_eta(start_time: float, processed_seconds: float, total_seconds: Opt
     return eta, elapsed
 
 
-def print_progress(i: int, seg: SegmentDict, total_duration: Optional[float], start_time: float) -> None:
+
+def print_progress(i: int, seg: Dict[str, object], total_duration: Optional[float], start_time: float):
     if i % PROGRESS_PRINT_EVERY_SEGMENTS != 0:
         return
 
@@ -844,11 +833,11 @@ def print_progress(i: int, seg: SegmentDict, total_duration: Optional[float], st
     percent = min(100.0, (processed / total_duration) * 100.0) if total_duration else None
     eta, elapsed = estimate_eta(start_time, processed, total_duration)
 
-    preview = seg["clean_text"].replace("\n", " ").strip()
+    preview = str(seg["clean_text"]).replace("\n", " ").strip()
     if len(preview) > 110:
         preview = preview[:110].rstrip() + "..."
 
-    parts = [f"[{i:04d}] {hhmmss(seg['start'])} -> {hhmmss(seg['end'])}"]
+    parts = [f"[{i:04d}] {hhmmss(float(seg['start']))} -> {hhmmss(float(seg['end']))}"]
     if percent is not None:
         parts.append(f"{percent:6.2f}%")
     parts.append(preview)
@@ -858,6 +847,7 @@ def print_progress(i: int, seg: SegmentDict, total_duration: Optional[float], st
         print(f"  > elapsed={hhmmss(elapsed)} | eta={hhmmss(eta)}")
 
 
+
 def loop_guard_normalize(text: str) -> str:
     text = normalize_basic(text).lower()
     text = re.sub(r"[^a-zа-яё0-9\s-]", " ", text, flags=re.IGNORECASE)
@@ -865,7 +855,7 @@ def loop_guard_normalize(text: str) -> str:
     return text
 
 
-def is_probable_loop_segment(clean_text: str, recent_segments: List[SegmentDict]) -> bool:
+def is_probable_loop_segment(clean_text: str, recent_segments: List[Dict[str, object]]) -> bool:
     if not ANTI_LOOP_GUARD:
         return False
 
@@ -877,39 +867,35 @@ def is_probable_loop_segment(clean_text: str, recent_segments: List[SegmentDict]
     if len(current) > LOOP_MAX_CHARS_PER_SEGMENT:
         return False
 
-    tail = recent_segments[-LOOP_WINDOW_SEGMENTS:]
-    normalized_recent = [loop_guard_normalize(x["clean_text"]) for x in tail if x["clean_text"].strip()]
-    if len(normalized_recent) < LOOP_MIN_DUPLICATES:
+    recent = [loop_guard_normalize(str(s.get("clean_text", ""))) for s in recent_segments[-LOOP_WINDOW_SEGMENTS:] if str(s.get("clean_text", "")).strip()]
+    if len(recent) < LOOP_MIN_DUPLICATES:
         return False
 
-    duplicates = sum(1 for x in normalized_recent if x == current)
-    unique_recent = len(set(normalized_recent))
+    duplicates = sum(1 for x in recent if x == current)
+    unique_count = len(set(recent))
 
-    if duplicates >= LOOP_MIN_DUPLICATES and unique_recent <= LOOP_MAX_UNIQUE_NORMALIZED:
+    if duplicates >= LOOP_MIN_DUPLICATES and unique_count <= LOOP_MAX_UNIQUE_NORMALIZED:
         return True
     return False
 
 
-def detect_language_from_info(info: object) -> Tuple[Optional[str], Optional[float]]:
-    language = None
-    probability = None
 
-    if info is not None:
-        language = cast(Optional[str], getattr(info, "language", None))
-        raw_probability = getattr(info, "language_probability", None)
-        if raw_probability is not None:
-            try:
-                probability = float(raw_probability)
-            except Exception:
-                probability = None
+def detect_language_from_info(info) -> Tuple[Optional[str], Optional[float]]:
+    language = getattr(info, "language", None)
+    probability = getattr(info, "language_probability", None)
+    try:
+        probability = float(probability) if probability is not None else None
+    except Exception:
+        probability = None
     return language, probability
 
 
-def infer_content_type(segments: List[SegmentDict]) -> str:
+
+def infer_content_type(segments: List[Dict[str, object]]) -> str:
     if CONTENT_TYPE != "auto":
         return CONTENT_TYPE
 
-    sample = " ".join(s["clean_text"] for s in segments[:120]).lower()
+    sample = " ".join(str(s["clean_text"]) for s in segments[:120]).lower()
     if not sample.strip():
         return "generic"
 
@@ -931,26 +917,28 @@ def infer_content_type(segments: List[SegmentDict]) -> str:
     return best_type if scores[best_type] > 0 else "generic"
 
 
-def filtered_segments_for_reading(segments: List[SegmentDict]) -> List[SegmentDict]:
-    result: List[SegmentDict] = []
+
+def filtered_segments_for_reading(segments: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    result = []
     for seg in segments:
-        text = seg["clean_text"].strip()
+        text = str(seg["clean_text"]).strip()
         if not text:
             continue
         if is_too_weak(text):
             continue
-        if looks_like_service_segment(text, seg["start"]):
+        if looks_like_service_segment(text, float(seg["start"])):
             continue
         result.append(seg)
     return result
 
 
-def group_into_paragraphs(clean_segments: List[SegmentDict], content_type: str) -> List[ParagraphDict]:
+
+def group_into_paragraphs(clean_segments: List[Dict[str, object]], content_type: str) -> List[Dict[str, object]]:
     if not clean_segments:
         return []
 
-    paragraphs: List[ParagraphDict] = []
-    current: List[SegmentDict] = []
+    paragraphs = []
+    current = []
 
     max_gap = 2.8 if content_type in {"lecture", "podcast"} else 2.2
     target_words = 120 if content_type in {"lecture", "podcast"} else 80
@@ -960,9 +948,9 @@ def group_into_paragraphs(clean_segments: List[SegmentDict], content_type: str) 
             current = [seg]
             continue
 
-        gap = seg["start"] - current[-1]["end"]
-        cur_words = sum(word_count(x["clean_text"]) for x in current)
-        marker_boost = section_marker_score(seg["clean_text"]) >= 3
+        gap = float(seg["start"]) - float(current[-1]["end"])
+        cur_words = sum(word_count(str(x["clean_text"])) for x in current)
+        marker_boost = section_marker_score(str(seg["clean_text"])) >= 3
 
         should_break = False
         if gap > max_gap:
@@ -973,144 +961,126 @@ def group_into_paragraphs(clean_segments: List[SegmentDict], content_type: str) 
             should_break = True
 
         if should_break:
-            text = " ".join(x["clean_text"] for x in current).strip()
-            paragraphs.append(
-                {
-                    "start": current[0]["start"],
-                    "end": current[-1]["end"],
-                    "text": normalize_basic(text),
-                    "segments": len(current),
-                }
-            )
+            text = " ".join(str(x["clean_text"]) for x in current).strip()
+            paragraphs.append({
+                "start": float(current[0]["start"]),
+                "end": float(current[-1]["end"]),
+                "text": normalize_basic(text),
+                "segments": len(current),
+            })
             current = [seg]
         else:
             current.append(seg)
 
     if current:
-        text = " ".join(x["clean_text"] for x in current).strip()
-        paragraphs.append(
-            {
-                "start": current[0]["start"],
-                "end": current[-1]["end"],
-                "text": normalize_basic(text),
-                "segments": len(current),
-            }
-        )
+        text = " ".join(str(x["clean_text"]) for x in current).strip()
+        paragraphs.append({
+            "start": float(current[0]["start"]),
+            "end": float(current[-1]["end"]),
+            "text": normalize_basic(text),
+            "segments": len(current),
+        })
+
     return paragraphs
 
 
-def merge_short_paragraphs(paragraphs: List[ParagraphDict], content_type: str) -> List[ParagraphDict]:
+
+def merge_short_paragraphs(paragraphs: List[Dict[str, object]], content_type: str) -> List[Dict[str, object]]:
     if not paragraphs:
         return []
 
     min_words = 38 if content_type in {"lecture", "podcast"} else 28
-    merged: List[ParagraphDict] = []
+    merged = []
 
     for p in paragraphs:
         if not merged:
-            merged.append(
-                {
-                    "start": p["start"],
-                    "end": p["end"],
-                    "text": p["text"],
-                    "segments": p["segments"],
-                }
-            )
+            merged.append(dict(p))
             continue
 
-        if word_count(p["text"]) < min_words and section_marker_score(p["text"]) == 0:
-            prev = merged[-1]
-            prev["end"] = p["end"]
-            prev["text"] = normalize_basic(prev["text"] + " " + p["text"])
-            prev["segments"] += p["segments"]
+        if word_count(str(p["text"])) < min_words and section_marker_score(str(p["text"])) == 0:
+            merged[-1]["end"] = p["end"]
+            merged[-1]["text"] = normalize_basic(str(merged[-1]["text"]) + " " + str(p["text"]))
+            merged[-1]["segments"] = int(merged[-1]["segments"]) + int(p["segments"])
         else:
-            merged.append(
-                {
-                    "start": p["start"],
-                    "end": p["end"],
-                    "text": p["text"],
-                    "segments": p["segments"],
-                }
-            )
+            merged.append(dict(p))
+
     return merged
 
 
-def choose_section_title(paragraphs: List[ParagraphDict]) -> str:
-    joined = " ".join(p["text"] for p in paragraphs[:2]).strip()
+
+def choose_section_title(paragraphs: List[Dict[str, object]]) -> str:
+    joined = " ".join(str(p["text"]) for p in paragraphs[:2]).strip()
     title = title_from_paragraph(joined)
     return title or "Раздел"
 
 
-def build_sections(paragraphs: List[ParagraphDict], content_type: str) -> List[SectionDict]:
+
+def build_sections(paragraphs: List[Dict[str, object]], content_type: str) -> List[Dict[str, object]]:
     if not paragraphs:
         return []
 
-    sections: List[SectionDict] = []
-    bucket: List[ParagraphDict] = []
+    sections = []
+    bucket = []
     target_paragraphs = 4 if content_type in {"lecture", "podcast"} else 3
 
     for p in paragraphs:
         bucket.append(p)
         enough = len(bucket) >= target_paragraphs
-        strong_marker = section_marker_score(p["text"]) >= 3 and len(bucket) >= 2
+        strong_marker = section_marker_score(str(p["text"])) >= 3 and len(bucket) >= 2
 
         if enough or strong_marker:
-            text = "\n\n".join(x["text"] for x in bucket)
-            sections.append(
-                {
-                    "start": bucket[0]["start"],
-                    "end": bucket[-1]["end"],
-                    "title": choose_section_title(bucket),
-                    "text": text,
-                    "paragraphs": list(bucket),
-                }
-            )
-            bucket = []
-
-    if bucket:
-        text = "\n\n".join(x["text"] for x in bucket)
-        sections.append(
-            {
-                "start": bucket[0]["start"],
-                "end": bucket[-1]["end"],
+            text = "\n\n".join(str(x["text"]) for x in bucket)
+            sections.append({
+                "start": float(bucket[0]["start"]),
+                "end": float(bucket[-1]["end"]),
                 "title": choose_section_title(bucket),
                 "text": text,
                 "paragraphs": list(bucket),
-            }
-        )
+            })
+            bucket = []
 
-    merged: List[SectionDict] = []
+    if bucket:
+        text = "\n\n".join(str(x["text"]) for x in bucket)
+        sections.append({
+            "start": float(bucket[0]["start"]),
+            "end": float(bucket[-1]["end"]),
+            "title": choose_section_title(bucket),
+            "text": text,
+            "paragraphs": list(bucket),
+        })
+
+    merged = []
     for sec in sections:
         if not merged:
             merged.append(sec)
             continue
-        if len(sec["paragraphs"]) == 1 and word_count(sec["text"]) < 55:
-            prev = merged[-1]
-            prev["end"] = sec["end"]
-            prev["text"] = prev["text"] + "\n\n" + sec["text"]
-            prev["paragraphs"].extend(sec["paragraphs"])
-            prev["title"] = choose_section_title(prev["paragraphs"])
+        if len(sec["paragraphs"]) == 1 and word_count(str(sec["text"])) < 55:
+            merged[-1]["end"] = sec["end"]
+            merged[-1]["text"] = str(merged[-1]["text"]) + "\n\n" + str(sec["text"])
+            merged[-1]["paragraphs"].extend(sec["paragraphs"])
+            merged[-1]["title"] = choose_section_title(merged[-1]["paragraphs"])
         else:
             merged.append(sec)
 
     return merged[:MAX_BRIEF_SECTIONS]
 
 
-def select_key_points(paragraphs: List[ParagraphDict], limit: int = MAX_KEY_POINTS) -> List[Tuple[float, str]]:
-    scored: List[Tuple[int, float, str]] = []
+
+def select_key_points(paragraphs: List[Dict[str, object]], limit: int = MAX_KEY_POINTS) -> List[Tuple[float, str]]:
+    scored = []
     for p in paragraphs:
-        text = p["text"]
+        text = str(p["text"])
         score = important_score(text) + section_marker_score(text)
-        if looks_like_service_segment(text, p["start"]):
+        if looks_like_service_segment(text, float(p["start"])):
             continue
         if word_count(text) < 12:
             continue
-        scored.append((score, p["start"], first_sentence_or_snippet(text, 22)))
+        scored.append((score, float(p["start"]), first_sentence_or_snippet(text, 22)))
 
     scored.sort(key=lambda x: (-x[0], x[1]))
 
     seen = set()
-    result: List[Tuple[float, str]] = []
+    result = []
     for _, sec, snippet in scored:
         key = normalize_basic(snippet).lower()
         if key in seen:
@@ -1124,18 +1094,20 @@ def select_key_points(paragraphs: List[ParagraphDict], limit: int = MAX_KEY_POIN
     return result
 
 
-def sentence_for_term(paragraphs: List[ParagraphDict], term: str) -> Optional[str]:
+
+def sentence_for_term(paragraphs: List[Dict[str, object]], term: str) -> Optional[str]:
     tl = term.lower()
     for p in paragraphs:
-        for sent in sentence_split(p["text"]):
+        for sent in sentence_split(str(p["text"])):
             if tl in sent.lower() and 6 <= word_count(sent) <= 36:
                 return sent
     return None
 
 
-def extract_glossary(paragraphs: List[ParagraphDict], max_terms: int = MAX_GLOSSARY_TERMS) -> List[Tuple[str, str]]:
-    text = "\n".join(p["text"] for p in paragraphs)
-    counter: Counter[str] = Counter()
+
+def extract_glossary(paragraphs: List[Dict[str, object]], max_terms: int = MAX_GLOSSARY_TERMS) -> List[Tuple[str, str]]:
+    text = "\n".join(str(p["text"]) for p in paragraphs)
+    counter = Counter()
 
     for token in keyword_candidates(text):
         counter[token] += 1
@@ -1145,7 +1117,7 @@ def extract_glossary(paragraphs: List[ParagraphDict], max_terms: int = MAX_GLOSS
         counter[token] += 3
 
     ranked = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
-    glossary: List[Tuple[str, str]] = []
+    glossary = []
     used = set()
 
     for term, _ in ranked:
@@ -1164,12 +1136,13 @@ def extract_glossary(paragraphs: List[ParagraphDict], max_terms: int = MAX_GLOSS
     return glossary
 
 
-def build_questions(sections: List[SectionDict], glossary: List[Tuple[str, str]], max_questions: int = MAX_STUDY_QUESTIONS) -> List[str]:
-    questions: List[str] = []
+
+def build_questions(sections: List[Dict[str, object]], glossary: List[Tuple[str, str]], max_questions: int = MAX_STUDY_QUESTIONS) -> List[str]:
+    questions = []
     seen = set()
 
     for sec in sections:
-        title = sec["title"].rstrip(".")
+        title = str(sec["title"]).rstrip(".")
         q = f"Что имеется в виду в разделе «{title}»?"
         if q not in seen:
             questions.append(q)
@@ -1188,19 +1161,18 @@ def build_questions(sections: List[SectionDict], glossary: List[Tuple[str, str]]
     return questions[:max_questions]
 
 
+
 def build_flashcards(glossary: List[Tuple[str, str]], max_cards: int = MAX_FLASHCARDS) -> List[Tuple[str, str]]:
-    cards: List[Tuple[str, str]] = []
-    for term, definition in glossary[:max_cards]:
-        cards.append((term, definition))
-    return cards
+    return glossary[:max_cards]
 
 
-def build_revision_plan(sections: List[SectionDict], content_type: str) -> List[str]:
-    plan: List[str] = []
+
+def build_revision_plan(sections: List[Dict[str, object]], content_type: str) -> List[str]:
+    plan = []
     if not sections:
         return plan
 
-    titles = [sec["title"] for sec in sections[:6]]
+    titles = [str(sec["title"]) for sec in sections[:6]]
     if content_type == "lecture":
         plan.append("1) Прочитать полный конспект целиком и отметить незнакомые места.")
         plan.append(f"2) Повторить основные разделы: {', '.join(titles)}.")
@@ -1214,8 +1186,9 @@ def build_revision_plan(sections: List[SectionDict], content_type: str) -> List[
     return plan
 
 
-def build_full_readable_text(paragraphs: List[ParagraphDict], content_type: str) -> str:
-    lines: List[str] = []
+
+def build_full_readable_text(paragraphs: List[Dict[str, object]], content_type: str) -> str:
+    lines = []
     header = {
         "lecture": "Полный читаемый конспект",
         "meeting": "Полный читаемый текст созвона",
@@ -1228,13 +1201,14 @@ def build_full_readable_text(paragraphs: List[ParagraphDict], content_type: str)
     lines.append("")
 
     for p in paragraphs:
-        lines.append(p["text"])
+        lines.append(str(p["text"]))
         lines.append("")
 
     return "\n".join(lines).strip() + "\n"
 
 
-def build_brief_text(content_type: str, sections: List[SectionDict], key_points: List[Tuple[float, str]]) -> str:
+
+def build_brief_text(content_type: str, sections: List[Dict[str, object]], key_points: List[Tuple[float, str]]) -> str:
     title = {
         "lecture": "Краткое содержание лекции",
         "meeting": "Краткое содержание созвона",
@@ -1242,15 +1216,13 @@ def build_brief_text(content_type: str, sections: List[SectionDict], key_points:
         "generic": "Краткое содержание",
     }.get(content_type, "Краткое содержание")
 
-    lines: List[str] = [title, "=" * len(title), ""]
+    lines = [title, "=" * len(title), ""]
 
     for i, sec in enumerate(sections, start=1):
         lines.append(f"{i}. {sec['title']}")
-        sec_paragraphs = sec["paragraphs"]
-        snippet = first_sentence_or_snippet(sec["text"], 28)
+        snippet = first_sentence_or_snippet(str(sec["text"]), 28)
         lines.append(f"   {snippet}")
-        if sec_paragraphs:
-            lines.append(f"   Временной диапазон: {hhmmss(sec['start'])} — {hhmmss(sec['end'])}")
+        lines.append(f"   Временной диапазон: {hhmmss(float(sec['start']))} — {hhmmss(float(sec['end']))}")
         lines.append("")
 
     if key_points:
@@ -1263,7 +1235,8 @@ def build_brief_text(content_type: str, sections: List[SectionDict], key_points:
     return "\n".join(lines).strip() + "\n"
 
 
-def build_study_pack_text(content_type: str, sections: List[SectionDict], glossary: List[Tuple[str, str]], questions: List[str], flashcards: List[Tuple[str, str]], revision_plan: List[str]) -> str:
+
+def build_study_pack_text(content_type: str, sections: List[Dict[str, object]], glossary: List[Tuple[str, str]], questions: List[str], flashcards: List[Tuple[str, str]], revision_plan: List[str]) -> str:
     title = {
         "lecture": "Study pack по лекции",
         "meeting": "Study pack по созвону",
@@ -1271,7 +1244,7 @@ def build_study_pack_text(content_type: str, sections: List[SectionDict], glossa
         "generic": "Study pack",
     }.get(content_type, "Study pack")
 
-    lines: List[str] = [title, "=" * len(title), ""]
+    lines = [title, "=" * len(title), ""]
 
     if questions:
         lines.append("Вопросы для самопроверки")
@@ -1304,28 +1277,30 @@ def build_study_pack_text(content_type: str, sections: List[SectionDict], glossa
         lines.append("Структура материала")
         lines.append("-" * len("Структура материала"))
         for i, sec in enumerate(sections, start=1):
-            lines.append(f"{i}. {sec['title']} ({hhmmss(sec['start'])} — {hhmmss(sec['end'])})")
+            lines.append(f"{i}. {sec['title']} ({hhmmss(float(sec['start']))} — {hhmmss(float(sec['end']))})")
         lines.append("")
 
     return "\n".join(lines).strip() + "\n"
 
 
-def build_srt(clean_segments: List[SegmentDict]) -> str:
-    blocks: List[str] = []
+
+def build_srt(clean_segments: List[Dict[str, object]]) -> str:
+    blocks = []
     n = 1
     for seg in clean_segments:
-        text = seg["clean_text"].strip()
+        text = str(seg["clean_text"]).strip()
         if not text:
             continue
         blocks.append(str(n))
-        blocks.append(f"{srt_time(seg['start'])} --> {srt_time(seg['end'])}")
+        blocks.append(f"{srt_time(float(seg['start']))} --> {srt_time(float(seg['end']))}")
         blocks.append(text)
         blocks.append("")
         n += 1
     return "\n".join(blocks).strip() + "\n"
 
 
-def build_json_payload(runtime: Dict[str, str], used_fallback: bool, lang: Optional[str], lang_prob: Optional[float], total_duration: Optional[float], segments: List[SegmentDict], content_type: str, sections: List[SectionDict]) -> Dict[str, object]:
+
+def build_json_payload(runtime: Dict[str, str], used_fallback: bool, lang: Optional[str], lang_prob: Optional[float], total_duration: Optional[float], segments: List[Dict[str, object]], content_type: str, sections: List[Dict[str, object]]) -> Dict[str, object]:
     return {
         "runtime": runtime,
         "used_fallback": used_fallback,
@@ -1336,31 +1311,29 @@ def build_json_payload(runtime: Dict[str, str], used_fallback: bool, lang: Optio
         "segments": segments,
         "sections": [
             {
-                "start": sec["start"],
-                "end": sec["end"],
-                "title": sec["title"],
+                "start": float(sec["start"]),
+                "end": float(sec["end"]),
+                "title": str(sec["title"]),
             }
             for sec in sections
         ],
     }
 
 
-def build_debug_payload(segments: List[SegmentDict], paragraphs: List[ParagraphDict], sections: List[SectionDict]) -> Dict[str, object]:
-    suspicious: List[Dict[str, object]] = []
+
+def build_debug_payload(segments: List[Dict[str, object]], paragraphs: List[Dict[str, object]], sections: List[Dict[str, object]]) -> Dict[str, object]:
+    suspicious = []
     for seg in segments:
-        diag = seg["diagnostics"]
-        flags = diag.get("flags", [])
+        flags = list(seg["diagnostics"].get("flags", []))
         if flags:
-            suspicious.append(
-                {
-                    "index": seg["index"],
-                    "start": seg["start"],
-                    "end": seg["end"],
-                    "raw": seg["text"],
-                    "clean": seg["clean_text"],
-                    "flags": flags,
-                }
-            )
+            suspicious.append({
+                "index": seg["index"],
+                "start": float(seg["start"]),
+                "end": float(seg["end"]),
+                "raw": str(seg["text"]),
+                "clean": str(seg["clean_text"]),
+                "flags": flags,
+            })
 
     return {
         "segments_total": len(segments),
@@ -1370,21 +1343,22 @@ def build_debug_payload(segments: List[SegmentDict], paragraphs: List[ParagraphD
     }
 
 
-def quality_warnings(segments: List[SegmentDict]) -> List[str]:
-    warnings: List[str] = []
+
+def quality_warnings(segments: List[Dict[str, object]]) -> List[str]:
+    warnings = []
     if not segments:
         warnings.append("Нет распознанных сегментов.")
         return warnings
 
-    empty_clean = sum(1 for seg in segments if not seg["clean_text"].strip())
+    empty_clean = sum(1 for seg in segments if not str(seg["clean_text"]).strip())
     suspicious = 0
     service_like = 0
 
     for seg in segments:
-        flags = seg["diagnostics"].get("flags", [])
+        flags = list(seg["diagnostics"].get("flags", []))
         if flags:
             suspicious += 1
-        if looks_like_service_segment(seg["clean_text"], seg["start"]):
+        if looks_like_service_segment(str(seg["clean_text"]), float(seg["start"])):
             service_like += 1
 
     total = len(segments)
@@ -1395,15 +1369,16 @@ def quality_warnings(segments: List[SegmentDict]) -> List[str]:
     if service_like / total > 0.30:
         warnings.append("Слишком много служебных/технических реплик — итог может быть менее полезным.")
 
-    loop_suspected = sum(1 for seg in segments if "decoder_loop_suspected" in seg["diagnostics"].get("flags", []))
+    loop_suspected = sum(1 for seg in segments if "decoder_loop_suspected" in list(seg["diagnostics"].get("flags", [])))
     if loop_suspected > 0:
         warnings.append(f"Обнаружены возможные зацикливания декодера: {loop_suspected} сегм.")
 
     return warnings
 
 
-def load_model_with_fallback(device_mode: str, profile: ProfileSettingsDict):
-    tried: List[Tuple[str, str, str]] = []
+
+def load_model_with_fallback(device_mode: str, profile: Dict[str, object]):
+    tried = []
 
     def attempt(device: str, model_name: str, compute_type: str):
         tried.append((device, model_name, compute_type))
@@ -1417,15 +1392,15 @@ def load_model_with_fallback(device_mode: str, profile: ProfileSettingsDict):
         )
         return model, model_name, device, compute_type
 
-    order: List[Tuple[str, str, str]] = []
+    order = []
     if device_mode == "cuda":
-        order.append(("cuda", profile["model_cuda"], profile["compute_cuda"]))
-        order.append(("cpu", profile["model_cpu"], profile["compute_cpu"]))
+        order.append(("cuda", str(profile["model_cuda"]), str(profile["compute_cuda"])))
+        order.append(("cpu", str(profile["model_cpu"]), str(profile["compute_cpu"])))
     elif device_mode == "cpu":
-        order.append(("cpu", profile["model_cpu"], profile["compute_cpu"]))
+        order.append(("cpu", str(profile["model_cpu"]), str(profile["compute_cpu"])))
     else:
-        order.append(("cuda", profile["model_cuda"], profile["compute_cuda"]))
-        order.append(("cpu", profile["model_cpu"], profile["compute_cpu"]))
+        order.append(("cuda", str(profile["model_cuda"]), str(profile["compute_cuda"])))
+        order.append(("cpu", str(profile["model_cpu"]), str(profile["compute_cpu"])))
 
     last_error = None
     for device, model_name, compute_type in order:
@@ -1438,16 +1413,17 @@ def load_model_with_fallback(device_mode: str, profile: ProfileSettingsDict):
     raise RuntimeError(f"Не удалось загрузить модель. Попытки: {tried}. Последняя ошибка: {last_error}")
 
 
-def transcribe_media(model: WhisperModel, media_path: Path, profile: ProfileSettingsDict):
-    beam_size = profile["beam_size"]
-    best_of = profile["best_of"]
-    temperature = profile["temperature"]
-    use_batched = profile["use_batched"]
-    batch_size = profile["batch_size"]
 
-    vad_parameters: Dict[str, int] = {"min_silence_duration_ms": MIN_SILENCE_DURATION_MS}
+def transcribe_media(model, media_path: Path, profile: Dict[str, object]):
+    beam_size = int(profile["beam_size"])
+    best_of = int(profile["best_of"])
+    temperature = float(profile["temperature"])
+    use_batched = bool(profile["use_batched"])
+    batch_size = int(profile["batch_size"])
 
-    kwargs: Dict[str, Any] = {
+    vad_parameters = {"min_silence_duration_ms": MIN_SILENCE_DURATION_MS}
+
+    kwargs = {
         "language": LANGUAGE,
         "task": TASK,
         "log_progress": False,
@@ -1490,7 +1466,8 @@ def transcribe_media(model: WhisperModel, media_path: Path, profile: ProfileSett
     return model.transcribe(str(media_path), **kwargs)
 
 
-def generate_outputs(out_dir: Path, base: str, runtime: Dict[str, str], used_fallback: bool, lang: Optional[str], lang_prob: Optional[float], total_duration: Optional[float], segments: List[SegmentDict], final: bool = False) -> Dict[str, str]:
+
+def generate_outputs(out_dir: Path, base: str, runtime: Dict[str, str], used_fallback: bool, lang: Optional[str], lang_prob: Optional[float], total_duration: Optional[float], segments: List[Dict[str, object]], final: bool = False) -> Dict[str, str]:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     filtered = filtered_segments_for_reading(segments)
@@ -1503,7 +1480,7 @@ def generate_outputs(out_dir: Path, base: str, runtime: Dict[str, str], used_fal
     flashcards = build_flashcards(glossary)
     revision_plan = build_revision_plan(sections, content_type)
 
-    paths: Dict[str, str] = {}
+    paths = {}
 
     if SAVE_FULL_READABLE:
         full_text = build_full_readable_text(paragraphs, content_type)
@@ -1550,7 +1527,8 @@ def generate_outputs(out_dir: Path, base: str, runtime: Dict[str, str], used_fal
     return paths
 
 
-def main() -> None:
+
+def main():
     media_path = Path(INPUT_MEDIA)
     if not media_path.exists():
         raise FileNotFoundError(f"Входной файл не найден: {media_path}")
@@ -1569,7 +1547,7 @@ def main() -> None:
     segments_gen, info = transcribe_media(model, media_path, PROFILE_SETTINGS)
     lang, lang_prob = detect_language_from_info(info)
 
-    runtime: Dict[str, str] = {
+    runtime = {
         "device": device_name,
         "compute_type": compute_type,
         "model": model_name,
@@ -1578,23 +1556,18 @@ def main() -> None:
         "language": str(lang),
     }
 
-    collected: List[SegmentDict] = []
-    last_paths: Dict[str, str] = {}
+    collected = []
+    last_paths = {}
 
     for i, seg in enumerate(segments_gen, start=1):
         raw_text = (seg.text or "").strip()
         clean_text, diagnostics = clean_segment_text(raw_text, custom_replacements)
 
         if is_probable_loop_segment(clean_text, collected):
-            flags = diagnostics.get("flags")
-            if flags is None:
-                flags = []
-                diagnostics["flags"] = flags
-            if "decoder_loop_suspected" not in flags:
-                flags.append("decoder_loop_suspected")
+            diagnostics.setdefault("flags", []).append("decoder_loop_suspected")
             clean_text = ""
 
-        item: SegmentDict = {
+        item = {
             "index": i,
             "start": float(seg.start),
             "end": float(seg.end),
@@ -1626,8 +1599,7 @@ def main() -> None:
         print("[INFO] Использован fallback на CPU.")
 
     print("\nСохранённые файлы:")
-    paths_to_show = final_paths or last_paths
-    for _, p in paths_to_show.items():
+    for _, p in (final_paths or last_paths).items():
         print(f" - {p}")
 
 
