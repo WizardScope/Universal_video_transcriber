@@ -2,6 +2,37 @@
 
 Универсальный Python-скрипт для транскрибации аудио и видео на базе `faster-whisper` с постобработкой текста, защитой от зацикливания декодера и автоматической генерацией итоговых материалов.
 
+## Быстрый старт на Android / Pydroid 3
+
+Если вы запускаете проект с телефона, Git не обязателен.
+
+Скачать проект ZIP-архивом:
+https://github.com/WizardScope/Universal_video_transcriber/archive/refs/heads/main.zip
+
+Дальше:
+
+1. Скачайте ZIP-архив.
+2. Распакуйте его в память телефона.
+3. Откройте `Universal_video_transcriber_v3_6_1.py` в Pydroid 3.
+4. Укажите пути к входному файлу и папке результата в блоке `USER SETTINGS`.
+5. Установите зависимости:
+
+```bash
+pip install --upgrade pip setuptools wheel
+pip install av
+pip install faster-whisper
+```
+
+6. Для первого запуска используйте безопасные настройки:
+
+```python
+DEVICE_MODE = "cpu"
+PROFILE = "fast"
+OFFLINE_ONLY = False
+```
+
+Важно: на Android зависимости `av` и `faster-whisper` могут устанавливаться не на всех устройствах.
+
 ## Возможности
 
 - транскрибация аудио и видео;
