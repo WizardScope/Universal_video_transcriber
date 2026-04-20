@@ -2,6 +2,16 @@
 """
 v3.6.1 universal
 
+Android / Pydroid 3:
+- если вы запускаете проект с телефона и не хотите использовать git,
+  скачайте ZIP-архив репозитория:
+  https://github.com/WizardScope/Universal_video_transcriber/archive/refs/heads/main.zip
+- после распаковки откройте этот файл в Pydroid 3 и заполните блок USER SETTINGS.
+- для первого запуска обычно безопаснее использовать:
+  DEVICE_MODE = "cpu"
+  PROFILE = "fast"
+  OFFLINE_ONLY = False
+
 Интересные факты про текущую версию:
 - это монолит без внешних постпроцессоров;
 - у него есть защита от ASR-зацикливания (бесконечное повторение одного и того же слова/фразы);
@@ -1069,7 +1079,7 @@ def group_into_paragraphs(clean_segments: List[Dict[str, object]], content_type:
             start_new = True
         else:
             prev = current[-1]
-            gap = float(seg["start"]) - float(prev["end"])
+            gap = float(seg["start"] ) - float(prev["end"])
 
             if gap >= hard_gap_sec:
                 flush()
@@ -1757,7 +1767,7 @@ def main():
         word_timestamps=WORD_TIMESTAMPS,
         condition_on_previous_text=CONDITION_ON_PREVIOUS_TEXT,
     )
-    if bool(PROFILE_SETTINGS["use_batched"]) and BatchedInferencePipeline is not None:
+    if bool(PROFILE_SETTINGS["use_batched"] ) and BatchedInferencePipeline is not None:
         kwargs["batch_size"] = int(PROFILE_SETTINGS["batch_size"])
 
     print("Начинаю транскрибацию...")
